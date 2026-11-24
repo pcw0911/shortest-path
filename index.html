@@ -1,0 +1,335 @@
+
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>최단거리 탐구 시뮬레이터</title>
+<style>
+body {
+  font-family: Arial, sans-serif;
+  max-width: 900px;
+  margin: 30px auto;
+  padding: 15px;
+  background: #f5f7fa;
+  color: #222;
+}
+h1 { text-align: center; }
+p { text-align: center; color: #555; }
+canvas {
+  width: 100%;
+  background: white;
+  border: 1px solid #ccc;
+  border-radius: 10px;
+  touch-action: none;
+}
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 15px 0;
+}
+button {
+  padding: 11px 16px;
+  border: 0;
+  border-radius: 7px;
+  background: #344f78;
+  color: white;
+  cursor: pointer;
+}
+button:hover { opacity: 0.8; }
+#status { text-align: left; }
+.results {
+  background: white;
+  padding: 18px;
+  border-radius: 10px;
+  line-height: 2;
+}
+</style>
+</head>
+<body>
+
+<h1>최단거리 탐구 시뮬레이터</h1>
+<p>좌표평면에서 두 점과 경로를 설정하고 거리를 비교해 보세요.</p>
+
+<canvas id="graph" width="800" height="600"></canvas>
+
+<div class="controls">
+  <button onclick="addMode()">중간점 추가</button>
+  <button onclick="clearMiddle()">중간점 삭제</button>
+  <button onclick="resetAll()">전체 초기화</button>
+</div>
+
+<p id="status">좌표평면을 클릭해 시작점 A와 도착점 B를 차례로 설정하세요.</p>
+
+<div class="results">
+  <div>직선 경로 길이: <b id="straight">-</b></div>
+  <div>꺾은선 경로 길이: <b id="broken">-</b></div>
+  <div>두 경로의 길이 차이: <b id="difference">-</b></div>
+</div>
+
+<script>
+const canvas = document.getElementById("graph");
+const ctx = canvas.getContext("2d");
+
+const W = 800, H = 600;
+const xmin = -10, xmax = 10;
+const ymin = -7.5, ymax = 7.5;
+
+let points = [];
+let adding = false;
+let dragging = -1;
+
+function toPixel(p) {
+  return {
+    x: (p.x-xmin)/(xmax-xmin)*W,
+    y: (ymax-p.y)/(ymax-ymin)*H
+  };
+}
+
+function toCoord(px, py) {
+  return {
+    x: xmin + px/W*(xmax-xmin),
+    y: ymax - py/H*(ymax-ymin)
+  };
+}
+
+function distance(a,b) {
+  return Math.hypot(b.x-a.x,b.y-a.y);
+}
+
+function draw() {
+  ctx.clearRect(0,0,W,H);
+
+  // 격자
+  ctx.strokeStyle = "#e5e8ed";
+  ctx.lineWidth = 1;
+
+  for(let x=xmin; x<=xmax; x++) {
+    let p=toPixel({x,y:0});
+    ctx.beginPath();
+    ctx.moveTo(p.x,0);
+    ctx.lineTo(p.x,H);
+    ctx.stroke();
+  }
+
+  for(let y=ymin; y<=ymax; y++) {
+    let p=toPixel({x:0,y});
+    ctx.beginPath();
+    ctx.moveTo(0,p.y);
+    ctx.lineTo(W,p.y);
+    ctx.stroke();
+  }
+
+  // 좌표축
+  ctx.strokeStyle="#777";
+  ctx.lineWidth=2;
+  let origin=toPixel({x:0,y:0});
+  ctx.beginPath();
+  ctx.moveTo(origin.x,0);
+  ctx.lineTo(origin.x,H);
+  ctx.moveTo(0,origin.y);
+  ctx.lineTo(W,origin.y);
+  ctx.stroke();
+
+  if(points.length >= 2) {
+    const A=points[0], B=points[1];
+    const mids=points.slice(2);
+
+    // 직선 경로
+    let a=toPixel(A), b=toPixel(B);
+    ctx.beginPath();
+    ctx.setLineDash([8,6]);
+    ctx.strokeStyle="#2878d0";
+    ctx.lineWidth=3;
+    ctx.moveTo(a.x,a.y);
+    ctx.lineTo(b.x,b.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // 꺾은선 경로
+    let route=[A,...mids,B];
+    ctx.beginPath();
+    ctx.strokeStyle="#e36b45";
+    ctx.lineWidth=4;
+    route.forEach((p,i)=>{
+      let q=toPixel(p);
+      if(i===0) ctx.moveTo(q.x,q.y);
+      else ctx.lineTo(q.x,q.y);
+    });
+    ctx.stroke();
+  }
+
+  // 점 표시
+  points.forEach((p,i)=>{
+    let q=toPixel(p);
+    ctx.beginPath();
+    ctx.arc(q.x,q.y,8,0,Math.PI*2);
+    ctx.fillStyle=i<2?"#2878d0":"#e36b45";
+    ctx.fill();
+
+    ctx.fillStyle="#222";
+    ctx.font="bold 16px Arial";
+    let name=i===0?"A":i===1?"B":"P"+(i-1);
+    ctx.fillText(name,q.x+12,q.y-12);
+    ctx.font="12px Arial";
+    ctx.fillText(
+      `(${p.x.toFixed(1)}, ${p.y.toFixed(1)})`,
+      q.x+12,q.y+15
+    );
+  });
+
+  calculate();
+}
+
+function calculate() {
+  if(points.length<2) {
+    document.getElementById("straight").textContent="-";
+    document.getElementById("broken").textContent="-";
+    document.getElementById("difference").textContent="-";
+    return;
+  }
+
+  const A=points[0], B=points[1];
+  const straight=distance(A,B);
+  let broken=0;
+  let route=[A,...points.slice(2),B];
+
+  for(let i=0;i<route.length-1;i++) {
+    broken+=distance(route[i],route[i+1]);
+  }
+
+  document.getElementById("straight").textContent=
+    straight.toFixed(2);
+  document.getElementById("broken").textContent=
+    broken.toFixed(2);
+  document.getElementById("difference").textContent=
+    (broken-straight).toFixed(2);
+}
+
+function addMode() {
+  if(points.length<2) {
+    alert("먼저 A와 B를 설정하세요.");
+    return;
+  }
+  adding=!adding;
+  document.getElementById("status").textContent=
+    adding?"좌표평면을 클릭해 중간점을 추가하세요.":"중간점 추가 모드가 꺼졌습니다.";
+}
+
+function clearMiddle() {
+  points=points.slice(0,2);
+  adding=false;
+  draw();
+  document.getElementById("status").textContent="중간점을 삭제했습니다.";
+}
+
+function resetAll() {
+  points=[];
+  adding=false;
+  dragging=-1;
+  draw();
+  document.getElementById("status").textContent=
+    "좌표평면을 클릭해 시작점 A와 도착점 B를 차례로 설정하세요.";
+}
+
+function pointerPosition(e) {
+  const r=canvas.getBoundingClientRect();
+  return {
+    x:(e.clientX-r.left)*W/r.width,
+    y:(e.clientY-r.top)*H/r.height
+  };
+}
+
+function handleDown(clientX, clientY, pointerId=null) {
+  const r=canvas.getBoundingClientRect();
+  const pos={
+    x:(clientX-r.left)*W/r.width,
+    y:(clientY-r.top)*H/r.height
+  };
+
+  // 기존 중간점을 누르면 이동 모드로 전환
+  for(let i=2;i<points.length;i++) {
+    let q=toPixel(points[i]);
+    if(Math.hypot(pos.x-q.x,pos.y-q.y)<22) {
+      dragging=i;
+      if(pointerId!==null && canvas.setPointerCapture) {
+        try { canvas.setPointerCapture(pointerId); } catch(err) {}
+      }
+      return;
+    }
+  }
+
+  const p=toCoord(pos.x,pos.y);
+
+  if(points.length<2) {
+    points.push(p);
+    document.getElementById("status").textContent=
+      points.length===1
+        ?"도착점 B를 선택하세요."
+        :"A와 B가 설정되었습니다. 중간점을 추가할 수 있습니다.";
+  } else if(adding) {
+    points.push(p);
+  }
+
+  draw();
+}
+
+function handleMove(clientX, clientY) {
+  if(dragging!==-1) {
+    const r=canvas.getBoundingClientRect();
+    const pos={
+      x:(clientX-r.left)*W/r.width,
+      y:(clientY-r.top)*H/r.height
+    };
+    points[dragging]=toCoord(pos.x,pos.y);
+    draw();
+  }
+}
+
+// 마우스 및 Pointer Events 지원 브라우저
+canvas.addEventListener("pointerdown",e=>{
+  // 터치 입력은 아래 touch 이벤트에서 처리해 중복 실행 방지
+  if(e.pointerType==="touch") return;
+  handleDown(e.clientX,e.clientY,e.pointerId);
+});
+
+canvas.addEventListener("pointermove",e=>{
+  if(e.pointerType==="touch") return;
+  handleMove(e.clientX,e.clientY);
+});
+
+canvas.addEventListener("pointerup",e=>{
+  if(e.pointerType!=="touch") dragging=-1;
+});
+
+canvas.addEventListener("pointercancel",e=>{
+  if(e.pointerType!=="touch") dragging=-1;
+});
+
+// 아이폰 파일 미리보기 등에서의 터치 입력 대응
+canvas.addEventListener("touchstart",e=>{
+  e.preventDefault();
+  const t=e.changedTouches[0];
+  handleDown(t.clientX,t.clientY);
+},{passive:false});
+
+canvas.addEventListener("touchmove",e=>{
+  e.preventDefault();
+  const t=e.changedTouches[0];
+  handleMove(t.clientX,t.clientY);
+},{passive:false});
+
+canvas.addEventListener("touchend",e=>{
+  e.preventDefault();
+  dragging=-1;
+},{passive:false});
+
+canvas.addEventListener("touchcancel",()=>{
+  dragging=-1;
+});
+
+draw();
+</script>
+</body>
+</html>
